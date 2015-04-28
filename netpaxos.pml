@@ -118,6 +118,7 @@ proctype Learner(byte id) {
     byte hv, hr;
     byte counta;
     byte cur_rnd = id;
+    byte prnd; 
     byte countdown;
     do
     ::  m2l??eval(id),minion,value ->
@@ -133,17 +134,21 @@ proctype Learner(byte id) {
     ::  chosen[id-1].aa[0] == 2 && chosen[id-1].aa[1] == 2 && nsent -> // Recovery Mode
         bprepare(cur_rnd);
         nsent = false
-    :: countdown <= 9 -> countdown++
-    ::  countdown > 9 -> cur_rnd = cur_rnd + PROPOSERS;
-                            bprepare(cur_rnd); 
-                            countdown = 0
+    ::  countdown <= 99 -> countdown++
+    ::  countdown > 99 ->   
+            prnd = cur_rnd;
+            cur_rnd = cur_rnd + PROPOSERS;
+            bprepare(cur_rnd); 
+            countdown = 0
+    ::  promise??eval(prnd),vrnd,vval -> skip
     ::  promise??eval(cur_rnd),vrnd,vval -> count++;
         if
         ::  vrnd >= hr -> hr = vrnd; hv = vval
         ::  else fi;
         if  
-        ::  count >= MAJORITY -> baccept(cur_rnd, hv)
+        ::  count == MAJORITY -> baccept(cur_rnd, hv); count = 0
         :: else fi;
+    ::  accepted??eval(prnd),value ->  skip
     ::  accepted??eval(cur_rnd),value -> 
         if
         ::  value == hv -> counta++;

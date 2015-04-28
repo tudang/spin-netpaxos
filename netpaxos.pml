@@ -4,9 +4,8 @@
 #define MAJORITY (ACCEPTORS/2)+1
 #define MAX (ACCEPTORS*PROPOSERS)
 #define MAX2 (ACCEPTORS*LEARNERS)
-#define p (chosen_v[0] != 0)
-#define q (chosen_v[1] != 0)
 
+chan p2m  = [PROPOSERS] of { byte, byte };
 chan m2m  = [MAX] of { byte, byte };
 chan m2l  = [MAX2] of { byte, byte, byte};
 chan prepare = [MAX2] of { byte, byte };
@@ -59,18 +58,32 @@ end:
 
 
 proctype Proposer(byte id, myval) {
-    byte i;
-    for(i:1.. ACCEPTORS) {
-    m2m!i,myval;
-    }
+    p2m!id,myval;
 }
 
+proctype Multiplexer() {
+    byte i, j;
+    byte p, val;
+    byte vals[2];
+    do
+    ::  p2m?p,val -> vals[i] = val; i++;
+    ::  i > 1 -> 
+            for(j:1.. ACCEPTORS) {
+                if
+                :: (j%2) == 0 -> m2m!j,vals[1]
+                :: else -> m2m!j,vals[0]
+                fi
+            }; 
+            i = 0
+    od
+}
 
 proctype Minion(byte id) {
     byte i;
-    byte value;
+    byte tmp_value, value;
     byte rnd, crnd;
     byte vrnd,vval; // store the latest value & associated round
+end:
     do
     ::  m2m??eval(id),value -> 
             if
@@ -78,19 +91,20 @@ proctype Minion(byte id) {
             :: else 
             fi;
             for(i:1.. LEARNERS) { m2l!i,id,value }  
-    ::  prepare?eval(id),crnd ->
+    ::  prepare??eval(id),crnd ->
             if
             ::  crnd > rnd ->
                     rnd = crnd; 
                     vrnd = crnd;
                     promise!rnd,vrnd,vval;
             :: else fi
-    ::  accept?eval(id),crnd,value ->
+    ::  accept??eval(id),crnd,tmp_value ->
             if
             ::  crnd >= rnd ->
                     rnd = crnd;
                     vrnd = crnd;
-                    accepted!crnd,value
+                    vval = tmp_value
+                    accepted!vrnd,vval
             ::  else fi;
     od
 }
@@ -103,6 +117,8 @@ proctype Learner(byte id) {
     byte count, vrnd, vval;
     byte hv, hr;
     byte counta;
+    byte cur_rnd = id;
+    byte countdown;
     do
     ::  m2l??eval(id),minion,value ->
         if
@@ -115,18 +131,25 @@ proctype Learner(byte id) {
     ::  chosen[id-1].aa[1] >= MAJORITY -> 
             chosen_v[id-1] = 2 ; break
     ::  chosen[id-1].aa[0] == 2 && chosen[id-1].aa[1] == 2 && nsent -> // Recovery Mode
-        bprepare(id);
+        bprepare(cur_rnd);
         nsent = false
-    ::  promise?eval(id),vrnd,vval -> count++;
+    :: countdown <= 9 -> countdown++
+    ::  countdown > 9 -> cur_rnd = cur_rnd + PROPOSERS;
+                            bprepare(cur_rnd); 
+                            countdown = 0
+    ::  promise??eval(cur_rnd),vrnd,vval -> count++;
         if
         ::  vrnd >= hr -> hr = vrnd; hv = vval
         ::  else fi;
         if  
-        ::  count >= MAJORITY -> baccept(id, hv)
+        ::  count >= MAJORITY -> baccept(cur_rnd, hv)
         :: else fi;
-    ::  accepted?eval(id),vval -> counta++;
+    ::  accepted??eval(cur_rnd),value -> 
         if
-        ::  counta >= MAJORITY -> chosen_v[id-1] = vval; break
+        ::  value == hv -> counta++;
+        :: else fi;
+        if
+        ::  counta >= MAJORITY -> chosen_v[id-1] = hv; break
         :: else fi
     od
 }
@@ -134,16 +157,17 @@ proctype Learner(byte id) {
 // model reordering and loss of packet by having 
 // a separated process to mess up the channel
 proctype Evil() {
-    byte id,minion,value;
+    byte id, value;
     do
-    ::  atomic { len(m2l) > ACCEPTORS ->  m2l?id,minion,value; m2l!id,minion,value }
-    ::  atomic { len(m2l) > ACCEPTORS ->  m2l?id,minion,value ; skip }
+    ::  atomic { nempty(m2m) ->  m2m?id,value; m2m!id,value }
+//    ::  atomic { nempty(m2m) ->  m2m?id,value; skip }
     od
 }
 
 init {
     byte i;
     atomic {
+        run Multiplexer();
         for(i:1.. PROPOSERS) {
             run Proposer(i,i);
         }
@@ -153,6 +177,6 @@ init {
         for(i:1.. LEARNERS) {
             run Learner(i);
         }
-        run Evil();
+            
     }
 }
